@@ -1,0 +1,74 @@
+.TH DOOM 1 "October 2026" "Doom 0.1.0" "User Commands"
+.SH NAME
+doom \- Polymorphic EDR/AV Evasion Payload Generator for Red Teams
+.SH SYNOPSIS
+.B doom
+[\fB\-b\fR, \fB\-\-batch\fR]
+[\fB\-l\fR \fILANG\fR]
+[\fB\-e\fR \fIENGINE\fR]
+[\fB\-\-lhost\fR \fIHOST\fR]
+[\fB\-\-lport\fR \fIPORT\fR]
+[\fB\-p\fR, \fB\-\-proxy\fR \fIPROXY_URL\fR]
+[\fB\-o\fR, \fB\-\-output\fR \fIFILE\fR]
+.SH DESCRIPTION
+.B Doom
+is an automated, AI-driven offensive security CLI tool built in memory-safe Rust. It generates non-signatured, polymorphic source code engineered to bypass modern Endpoint Detection and Response (EDR) agents and Antivirus (AV) heuristic scanners.
+
+Doom dynamically injects defense evasion primitives into large language model (LLM) prompts, including Direct/Indirect Syscalls (Hell's Gate / Halo's Gate), dynamic API hashing (DJB2/Murmur), stack string encryption, and anti-sandbox timing verification.
+
+All operator network indicators (LHOST, LPORT, domains) are tokenized locally prior to transmission, ensuring client confidentiality and NDA compliance. Communications with cloud LLM endpoints can be routed over Tor or SOCKS5 proxies to conceal the operator's IP address.
+.SH OPTIONS
+.TP
+.BR \-b ", " \-\-batch
+Run in non-interactive batch mode. Skips the interactive terminal configuration wizard.
+.TP
+.BR \-l ", " \-\-lang " \fILANG\fR"
+Target output language for generated payload source code. Supported values: \fBrust\fR, \fBcpp\fR, \fBcsharp\fR. Default is \fBrust\fR.
+.TP
+.BR \-e ", " \-\-engine " \fIENGINE\fR"
+AI inference backend. Supported values: \fBollama\fR (local offline), \fBdeepseek\fR (cloud API), \fBopenai\fR (cloud API). Default is \fBollama\fR.
+.TP
+.BI \-\-lhost " HOST"
+Listener host (IPv4, IPv6, or fully qualified domain name) for the command bridge connection. Default is \fB10.10.14.50\fR.
+.TP
+.BI \-\-lport " PORT"
+Listener port for incoming connections. Must be an integer between 1 and 65535. Default is \fB4444\fR.
+.TP
+.BR \-p ", " \-\-proxy " \fIPROXY_URL\fR"
+SOCKS5 or HTTP proxy URL for network anonymity (e.g., \fBsocks5://127.0.0.1:9050\fR for Tor).
+.TP
+.BR \-o ", " \-\-output " \fIFILE\fR"
+Path to destination output file where generated source code will be stored with mode 0600 permissions.
+.TP
+.BR \-h ", " \-\-help
+Print help information.
+.TP
+.BR \-V ", " \-\-version
+Print version information.
+.SH SECURITY AND OPSEC
+.TP
+.B Client Token Scrubbing
+Local regex filters scrub private IPv4 addresses and replace them with synthetic placeholders before sending prompt text over the wire. Values are re-injected strictly on the local machine after code generation.
+.TP
+.B Trigger-Word Euphemism
+Offensive terms such as "reverse shell" and "EDR bypass" are automatically rewritten into benign systems-engineering terms to prevent automated censorship, account suspension, or telemetry logging by cloud providers.
+.TP
+.B Zeroization
+In-memory API credentials and authorization headers are scrubbed using the \fIzeroize\fR crate immediately following HTTP completion.
+.SH EXAMPLES
+.TP
+Launch the interactive wizard:
+.B doom
+.TP
+Generate an evasion payload through Tor via DeepSeek:
+.B export DEEPSEEK_API_KEY="sk-..."
+.br
+.B doom \-b \-e deepseek \-p socks5://127.0.0.1:9050 \-l rust \-\-lhost 10.10.14.5 \-\-lport 8443 \-o payload.rs
+.TP
+Generate an offline C++ payload using local Ollama:
+.B doom \-b \-e ollama \-l cpp \-\-lhost 192.168.1.100 \-\-lport 4444 \-o payload.cpp
+.SH AUTHOR
+Developed for authorized red team engagements and purple team telemetry resilience research.
+.SH SEE ALSO
+.BR nmap (1),
+.BR nc (1)

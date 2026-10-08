@@ -1,0 +1,6 @@
+/target
+*.env
+*.log
+doom_payload.*
+payload.exe
+*.bin
