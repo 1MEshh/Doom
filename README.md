@@ -224,8 +224,4 @@ Forensic Leak Detected: False
 
 ---
 
-## Disclaimer and Legal Notice
 
-Doom is developed exclusively for authorized penetration testing, purple team validation, and academic defense research. It is intended to assist security teams in auditing their telemetry pipelines and improving EDR detection capabilities.
-
-Executing simulated adversary operations against systems without prior explicit, written authorization from the system owner is illegal under computer misuse legislation (including CFAA, Computer Misuse Act, and relevant national penal codes). The authors and contributors assume no liability for misuse of this software.
