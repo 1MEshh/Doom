@@ -89,7 +89,7 @@ Before establishing network sockets or executing stages, generated payloads impl
 
 ---
 
-## OPSEC and Threat Model
+# OPSEC and Threat Model
 
 Doom is built to protect the operator and client confidentiality:
 
