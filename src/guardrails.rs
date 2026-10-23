@@ -4,7 +4,9 @@
 
 use colored::Colorize;
 use regex::Regex;
+use std::collections::VecDeque;
 use std::sync::LazyLock;
+use std::time::{Duration, Instant};
 
 static LOCALHOST_PATTERNS: LazyLock<Vec<Regex>> = LazyLock::new(|| {
     vec![
@@ -123,6 +125,109 @@ impl GuardrailChecker {
     }
 }
 
+/// Sliding window rate limiter and token safety budget tracker.
+/// Prevents runaway prompt loops, denial-of-wallet, or rate limit exhaustion
+/// during automated batch payload generation.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct SafetyBudgetTracker {
+    window_duration: Duration,
+    max_requests: usize,
+    max_tokens: usize,
+    request_log: VecDeque<Instant>,
+    token_log: VecDeque<(Instant, usize)>,
+}
+
+#[allow(dead_code)]
+impl SafetyBudgetTracker {
+    pub fn new(window_duration: Duration, max_requests: usize, max_tokens: usize) -> Self {
+        Self {
+            window_duration,
+            max_requests,
+            max_tokens,
+            request_log: VecDeque::new(),
+            token_log: VecDeque::new(),
+        }
+    }
+
+    /// Prune entries older than the current sliding window.
+    fn prune(&mut self, now: Instant) {
+        let cutoff = now.checked_sub(self.window_duration).unwrap_or(now);
+        while let Some(&ts) = self.request_log.front() {
+            if ts < cutoff {
+                self.request_log.pop_front();
+            } else {
+                break;
+            }
+        }
+        while let Some(&(ts, _)) = self.token_log.front() {
+            if ts < cutoff {
+                self.token_log.pop_front();
+            } else {
+                break;
+            }
+        }
+    }
+
+    /// Returns the total tokens consumed within the current sliding window.
+    pub fn current_tokens(&mut self, now: Instant) -> usize {
+        self.prune(now);
+        self.token_log.iter().map(|(_, tokens)| *tokens).sum()
+    }
+
+    /// Returns current active request count within the sliding window.
+    pub fn current_requests(&mut self, now: Instant) -> usize {
+        self.prune(now);
+        self.request_log.len()
+    }
+
+    /// Check if a request consuming `estimated_tokens` is allowed under current budget.
+    pub fn check_budget(&mut self, estimated_tokens: usize, now: Instant) -> Result<(), String> {
+        self.prune(now);
+
+        if self.request_log.len() >= self.max_requests {
+            return Err(format!(
+                "Rate limit exceeded: {} requests recorded in sliding window (max {})",
+                self.request_log.len(),
+                self.max_requests
+            ));
+        }
+
+        let total_tokens: usize = self.token_log.iter().map(|(_, t)| *t).sum();
+        if total_tokens.saturating_add(estimated_tokens) > self.max_tokens {
+            return Err(format!(
+                "Token budget exceeded: current {} + incoming {} exceeds maximum {}",
+                total_tokens, estimated_tokens, self.max_tokens
+            ));
+        }
+
+        Ok(())
+    }
+
+    /// Record a completed request and its consumed token count.
+    pub fn record_usage(&mut self, tokens: usize, now: Instant) {
+        self.prune(now);
+        self.request_log.push_back(now);
+        self.token_log.push_back((now, tokens));
+    }
+
+    /// Convenience helper checking budget at the current timestamp.
+    pub fn check_budget_now(&mut self, estimated_tokens: usize) -> Result<(), String> {
+        self.check_budget(estimated_tokens, Instant::now())
+    }
+
+    /// Convenience helper recording usage at the current timestamp.
+    pub fn record_usage_now(&mut self, tokens: usize) {
+        self.record_usage(tokens, Instant::now());
+    }
+
+    /// Reset tracker state.
+    pub fn reset(&mut self) {
+        self.request_log.clear();
+        self.token_log.clear();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +274,53 @@ mod tests {
         let report = GuardrailChecker::inspect(truncated_code, "rs");
         assert!(!report.is_complete);
         assert!(report.warnings.iter().any(|w| w.contains("Mismatched curly braces")));
+    }
+
+    #[test]
+    fn test_budget_tracker_sliding_window() {
+        let mut tracker = SafetyBudgetTracker::new(Duration::from_secs(60), 3, 1000);
+        let t0 = Instant::now();
+
+        assert!(tracker.check_budget(200, t0).is_ok());
+        tracker.record_usage(200, t0);
+
+        assert!(tracker.check_budget(300, t0 + Duration::from_secs(10)).is_ok());
+        tracker.record_usage(300, t0 + Duration::from_secs(10));
+
+        assert_eq!(tracker.current_requests(t0 + Duration::from_secs(20)), 2);
+        assert_eq!(tracker.current_tokens(t0 + Duration::from_secs(20)), 500);
+
+        // Third request: 400 tokens -> total 900 <= 1000, 3 requests <= 3
+        assert!(tracker.check_budget(400, t0 + Duration::from_secs(20)).is_ok());
+        tracker.record_usage(400, t0 + Duration::from_secs(20));
+
+        // 4th request exceeds max_requests (3)
+        assert!(tracker.check_budget(50, t0 + Duration::from_secs(25)).is_err());
+
+        // Fast forward beyond the 60s window for t0 (t0 is at 0, t1 at 65s)
+        let t1 = t0 + Duration::from_secs(65);
+        // t0 pruned (200 tokens pruned), only t0+10 and t0+20 remain (2 requests, 700 tokens)
+        assert_eq!(tracker.current_requests(t1), 2);
+        assert_eq!(tracker.current_tokens(t1), 700);
+        assert!(tracker.check_budget(200, t1).is_ok());
+
+        // But 400 tokens would exceed (700 + 400 = 1100 > 1000)
+        assert!(tracker.check_budget(400, t1).is_err());
+    }
+
+    #[test]
+    fn test_budget_tracker_reset() {
+        let mut tracker = SafetyBudgetTracker::new(Duration::from_secs(30), 2, 500);
+        let t0 = Instant::now();
+        tracker.record_usage(400, t0);
+        assert_eq!(tracker.current_tokens(t0), 400);
+
+        tracker.reset();
+        assert_eq!(tracker.current_tokens(t0), 0);
+        assert_eq!(tracker.current_requests(t0), 0);
+
+        assert!(tracker.check_budget_now(100).is_ok());
+        tracker.record_usage_now(100);
+        assert_eq!(tracker.current_requests(Instant::now()), 1);
     }
 }
