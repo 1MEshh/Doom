@@ -5,26 +5,32 @@
 
 use regex::Regex;
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::OnceLock;
 
-static IP_REGEX: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").expect("Valid IP regex"));
+static IP_REGEX: OnceLock<Regex> = OnceLock::new();
+static TRIGGER_REPLACEMENTS: OnceLock<Vec<(Regex, &'static str)>> = OnceLock::new();
 
-static TRIGGER_REPLACEMENTS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::new(|| {
-    vec![
-        (Regex::new("(?i)reverse shell").expect("Valid regex"), "bidirectional diagnostic command bridge"),
-        (Regex::new("(?i)reverse_shell").expect("Valid regex"), "diagnostic_command_bridge"),
-        (Regex::new("(?i)shellcode").expect("Valid regex"), "position-independent binary executable buffer"),
-        (Regex::new("(?i)payload").expect("Valid regex"), "execution module"),
-        (Regex::new("(?i)edr bypass").expect("Valid regex"), "security telemetry hook evasion stub"),
-        (Regex::new("(?i)av bypass").expect("Valid regex"), "antivirus heuristic resilience mechanism"),
-        (Regex::new("(?i)malware").expect("Valid regex"), "system resilience test harness"),
-        (Regex::new("(?i)process hollowing").expect("Valid regex"), "cross-process memory unmapping and entrypoint relocation"),
-        (Regex::new("(?i)process injection").expect("Valid regex"), "cross-process thread context initialization"),
-        (Regex::new("(?i)keylogger").expect("Valid regex"), "low-level keyboard event interceptor"),
-        (Regex::new(r"(?i)c2\b").expect("Valid regex"), "command telemetry server"),
-    ]
-});
+pub fn get_ip_regex() -> &'static Regex {
+    IP_REGEX.get_or_init(|| Regex::new(r"\b(?:\d{1,3}\.){3}\d{1,3}\b").expect("Valid IP regex"))
+}
+
+pub fn get_trigger_replacements() -> &'static [(Regex, &'static str)] {
+    TRIGGER_REPLACEMENTS.get_or_init(|| {
+        vec![
+            (Regex::new("(?i)reverse shell").expect("Valid regex"), "bidirectional diagnostic command bridge"),
+            (Regex::new("(?i)reverse_shell").expect("Valid regex"), "diagnostic_command_bridge"),
+            (Regex::new("(?i)shellcode").expect("Valid regex"), "position-independent binary executable buffer"),
+            (Regex::new("(?i)payload").expect("Valid regex"), "execution module"),
+            (Regex::new("(?i)edr bypass").expect("Valid regex"), "security telemetry hook evasion stub"),
+            (Regex::new("(?i)av bypass").expect("Valid regex"), "antivirus heuristic resilience mechanism"),
+            (Regex::new("(?i)malware").expect("Valid regex"), "system resilience test harness"),
+            (Regex::new("(?i)process hollowing").expect("Valid regex"), "cross-process memory unmapping and entrypoint relocation"),
+            (Regex::new("(?i)process injection").expect("Valid regex"), "cross-process thread context initialization"),
+            (Regex::new("(?i)keylogger").expect("Valid regex"), "low-level keyboard event interceptor"),
+            (Regex::new(r"(?i)c2\b").expect("Valid regex"), "command telemetry server"),
+        ]
+    })
+}
 
 pub struct TokenScrubber {
     mappings: HashMap<String, String>,
@@ -51,8 +57,8 @@ impl TokenScrubber {
             scrubbed = scrubbed.replace(sensitive_val, placeholder);
         }
 
-        // Additional heuristic regex scrubbing for naked IPv4 addresses using precompiled LazyLock
-        scrubbed = IP_REGEX.replace_all(&scrubbed, "{{DOOM_SCRUBBED_IP}}").to_string();
+        // Additional heuristic regex scrubbing for naked IPv4 addresses using precompiled OnceLock
+        scrubbed = get_ip_regex().replace_all(&scrubbed, "{{DOOM_SCRUBBED_IP}}").to_string();
 
         scrubbed
     }
@@ -77,7 +83,7 @@ impl TriggerWordSanitizer {
     pub fn sanitize(prompt: &str) -> String {
         let mut sanitized = prompt.to_string();
 
-        for (re, replacement) in TRIGGER_REPLACEMENTS.iter() {
+        for (re, replacement) in get_trigger_replacements().iter() {
             sanitized = re.replace_all(&sanitized, *replacement).to_string();
         }
 
@@ -119,5 +125,16 @@ mod tests {
         assert!(!sanitized.to_lowercase().contains("process hollowing"));
         assert!(sanitized.contains("bidirectional diagnostic command bridge"));
         assert!(sanitized.contains("security telemetry hook evasion stub"));
+    }
+
+    #[test]
+    fn test_oncelock_static_regex() {
+        let ip_re = get_ip_regex();
+        assert!(ip_re.is_match("192.168.1.50"));
+        assert!(!ip_re.is_match("invalid-ip"));
+
+        let replacements = get_trigger_replacements();
+        assert!(!replacements.is_empty());
+        assert!(replacements.iter().any(|(_, rep)| *rep == "diagnostic_command_bridge"));
     }
 }
