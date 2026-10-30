@@ -102,6 +102,49 @@ Doom is built to protect the operator and client confidentiality:
 | Host Execution Safety | Source-only architecture. The CLI never executes or compiles arbitrary code automatically. An internal safety linter intercepts rogue downloaders. |
 | Local Multi-User Snooping | Payloads are written to disk with POSIX file mode 0600 (owner read/write only). |
 | Binary Forensic Leakage | Release builds employ `--remap-path-prefix` and symbol stripping to eliminate build paths, usernames, and toolchain identifiers from compiled binaries. |
+| Cloud Telemetry & Tracking | Zero-telemetry policy: Doom contains no phone-home mechanisms, analytics collectors, or crash telemetry. Offline inference routes strictly to localhost. |
+| Model Weight Exfiltration | Offline inference uses locally cached Ollama weights. Zero network transit occurs when operating with local models in air-gapped environments. |
+
+### Offline Model Inference & Local Caching
+
+For high-security operations, sensitive client engagements, or air-gapped red team environments, Doom supports completely offline model inference via Ollama or compatible local OpenAI-format inference servers:
+
+- **Local Weight Caching**: Model checkpoints (e.g., `qwen2.5-coder`, `deepseek-coder`, `llama3`) are cached locally on disk in the operator's environment. Once pulled, inference occurs without outbound internet access.
+- **Air-Gapped Operation**: Run Doom within an isolated network namespace or behind strict egress firewall drop rules (`iptables -A OUTPUT -d 127.0.0.1 -j ACCEPT; iptables -A OUTPUT -j DROP`).
+- **Zero External API Dependencies**: Prompt construction, token scrubbing, syntactic verification, and rehydration execute locally within the Doom binary.
+
+```bash
+# Verify air-gapped execution with local model inference:
+doom -b -e ollama -l rust --lhost 10.10.14.50 --lport 4444 -o payload.rs
+```
+
+### Zero Cloud Telemetry Policy
+
+Doom enforces an absolute zero-telemetry guarantee:
+- **No Diagnostics or Analytics**: There are no background telemetry threads, Google Analytics pings, Sentry crash reporters, or usage counters.
+- **No Remote Token Logging**: When utilizing cloud providers (DeepSeek, OpenAI), prompt tokens are scrubbed of all operator IPs and customer identifiers prior to dispatch.
+- **Deterministic Dispatches**: Network requests are dispatched solely to the endpoint configured by the operator (or local Ollama daemon at `http://127.0.0.1:11434`), optionally wrapped in SOCKS5/Tor.
+
+### Local Security Auditing
+
+Operators can independently audit the framework's runtime isolation and zero-telemetry posture:
+
+1. **Egress Traffic Inspection**:
+   Audit network activity during payload generation using `tcpdump` or `strace`:
+   ```bash
+   # Confirm zero packets leave the loopback interface during local inference:
+   sudo tcpdump -i any -n "not host 127.0.0.1"
+   ```
+
+2. **Binary Symbol & String Audit**:
+   Verify compiled binaries contain no tracking domains, telemetry endpoints, or developer path metadata:
+   ```bash
+   strings target/release/doom | grep -iE "(telemetry|analytics|metrics|sentry|segment)"
+   # Output: empty (no matches)
+   ```
+
+3. **Source Code Static Audit**:
+   Doom's source tree relies exclusively on vetted crates (`reqwest` with rustls, `tokio`, `zeroize`, `regex`, `colored`, `clap`). Run `cargo audit` and verify dependency provenance.
 
 ---
 
